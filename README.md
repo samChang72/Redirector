@@ -1,8 +1,18 @@
 ## Description
 Web browser extension (Firefox, Vivaldi, Chrome, Opera, Edge) to redirect URLs based on regex or wildcard patterns.
 
+**Version 4.0.0** - Now supports Chrome Manifest V3! This major update brings compatibility with the latest Chrome extension standards while maintaining all existing functionality.
+
 ## Tribute
 In loving memory of Einar Egilsson, who gave us Redirector and selflessly nurtured it for many years.  We miss you Einar, and will always remember your kindness and generosity.
+
+## What's New in 4.0.0
+- ✅ **Chrome Manifest V3 Support** - Fully compatible with the latest Chrome extension architecture
+- ✅ **Service Worker Migration** - Background scripts converted to Service Worker for better performance
+- ✅ **declarativeNetRequest API** - Updated from webRequest to the new declarativeNetRequest API
+- ✅ **Enhanced Security** - Improved permission model with host_permissions
+- ✅ **Maintained Compatibility** - All existing redirect rules continue to work seamlessly
+- ✅ **Cross-Browser Support** - Still works on Firefox, Chrome, Edge, Opera, and Vivaldi
 
 ## Download Links
 * [Firefox](https://addons.mozilla.org/firefox/addon/redirector/)
@@ -11,6 +21,26 @@ In loving memory of Einar Egilsson, who gave us Redirector and selflessly nurtur
 Opera extension is no longer present (as of 2023/01/16)
 * [Opera](https://addons.opera.com/extensions/details/redirector-2/)
 -->
+
+## Technical Notes for 4.0.0
+
+### Chrome Manifest V3 Migration
+This version introduces support for Chrome's Manifest V3, which brings several architectural changes:
+
+- **Service Worker**: Background scripts now run as a Service Worker instead of persistent background pages
+- **declarativeNetRequest**: Redirects are now handled using Chrome's declarativeNetRequest API instead of webRequest
+- **Enhanced Permissions**: More granular permission system with explicit host permissions
+- **Improved Security**: Better isolation and security model
+
+### Compatibility
+- **Chrome/Chromium browsers**: Requires Chrome 88+ for full Manifest V3 support
+- **Firefox**: Continues to work with existing WebExtensions API
+- **Legacy Support**: Version 3.x remains available for older browsers
+
+### Migration from 3.x
+- All existing redirect rules are automatically migrated
+- No user action required during the update
+- Settings and preferences are preserved
 
 ## Examples
 ### De-mobilizer
