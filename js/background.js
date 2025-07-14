@@ -43,28 +43,29 @@ function setIcon(image) {
 // Convert redirects to declarativeNetRequest rules
 function convertRedirectsToRules(redirects) {
 	const rules = [];
-	let ruleId = 1;
+	let ruleId = 1; // Start from 1 since all existing rules should be cleared first
 
 	for (const redirect of redirects) {
 		if (redirect.disabled) continue;
 
-		// Create redirect object for processing
-		const redirectObj = new Redirect(redirect);
-		
-		// Skip if there are compilation errors
-		if (redirectObj.error) {
-			log('Skipping redirect due to error: ' + redirectObj.error);
-			continue;
-		}
+		try {
+			// Create redirect object for processing
+			const redirectObj = new Redirect(redirect);
+			
+			// Skip if there are compilation errors
+			if (redirectObj.error) {
+				log('Skipping redirect due to error: ' + redirectObj.error);
+				continue;
+			}
 
-		const rule = {
-			id: ruleId++,
-			priority: 1,
-			action: {
-				type: 'redirect'
-			},
-			condition: {}
-		};
+			const rule = {
+				id: ruleId++,
+				priority: 1,
+				action: {
+					type: 'redirect'
+				},
+				condition: {}
+			};
 
 		// Handle different pattern types
 		if (redirect.patternType === 'W') { // Wildcard
@@ -155,6 +156,10 @@ function convertRedirectsToRules(redirects) {
 
 		rules.push(rule);
 		log(`Created rule ${rule.id}: ${redirect.includePattern} -> ${redirect.redirectUrl}`);
+		
+		} catch (error) {
+			log('Error processing redirect rule: ' + error.message + ', redirect: ' + JSON.stringify(redirect));
+		}
 	}
 
 	return rules;
@@ -168,37 +173,58 @@ async function updateDeclarativeRules() {
 		const result = await chrome.storage.local.get({ redirects: [] });
 		const redirects = result.redirects;
 		
-		// Get current dynamic rules to remove them
+		// Step 1: Get and remove ALL existing rules first
 		const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
 		const existingRuleIds = existingRules.map(rule => rule.id);
 		
-		if (redirects.length === 0) {
-			log('No redirects defined, clearing all rules');
-			if (existingRuleIds.length > 0) {
+		if (existingRuleIds.length > 0) {
+			log(`Removing ${existingRuleIds.length} existing rules: [${existingRuleIds.join(', ')}]`);
+			await chrome.declarativeNetRequest.updateDynamicRules({
+				removeRuleIds: existingRuleIds
+			});
+			
+			// Wait a bit to ensure removal is complete
+			await new Promise(resolve => setTimeout(resolve, 100));
+			
+			// Verify rules are cleared
+			const remainingRules = await chrome.declarativeNetRequest.getDynamicRules();
+			if (remainingRules.length > 0) {
+				log(`Warning: ${remainingRules.length} rules still exist after removal`);
+				// Force remove any remaining rules
+				const remainingIds = remainingRules.map(r => r.id);
 				await chrome.declarativeNetRequest.updateDynamicRules({
-					removeRuleIds: existingRuleIds
+					removeRuleIds: remainingIds
 				});
+				await new Promise(resolve => setTimeout(resolve, 50));
 			}
+		}
+		
+		if (redirects.length === 0) {
+			log('No redirects defined, all rules cleared');
 			return;
 		}
 
 		currentRedirects = redirects;
+		
+		// Step 2: Generate new rules with fresh IDs starting from 1
 		const newRules = convertRedirectsToRules(redirects);
 		
 		log(`Converting ${redirects.length} redirects to ${newRules.length} declarativeNetRequest rules`);
 
-		// Update rules
-		const updateRules = {
-			removeRuleIds: existingRuleIds,
-			addRules: newRules
-		};
+		if (newRules.length === 0) {
+			log('No valid rules to add');
+			return;
+		}
 
-		await chrome.declarativeNetRequest.updateDynamicRules(updateRules);
+		// Step 3: Add new rules
+		log(`Adding rules with IDs: [${newRules.map(r => r.id).join(', ')}]`);
+		await chrome.declarativeNetRequest.updateDynamicRules({
+			addRules: newRules
+		});
 		log('Successfully updated declarativeNetRequest rules');
 		
 	} catch (error) {
 		log('Error updating declarativeNetRequest rules: ' + error.message, true);
-		console.error('Detailed error:', error);
 	}
 }
 
@@ -302,10 +328,11 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
 			sendResponse(obj);
 			log('Sent redirects to content page');
 		});
+		return true; // Keep sendResponse alive for async response
 	} else if (request.type == 'save-redirects') {
 		console.log('Saving redirects, count=' + request.redirects.length);
 		delete request.type;
-		storageArea.set(request, function () {
+		storageArea.set(request, async function () {
 			if (chrome.runtime.lastError) {
 				if (chrome.runtime.lastError.message.indexOf("QUOTA_BYTES_PER_ITEM quota exceeded") > -1) {
 					log("Redirects failed to save as size of redirects larger than allowed limit per item by Sync");
@@ -316,21 +343,30 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
 			} else {
 				log('Finished saving redirects to storage');
 				// Update rules after saving
-				updateDeclarativeRules();
-				sendResponse({
-					message: "Redirects saved"
-				});
+				try {
+					await updateDeclarativeRules();
+					sendResponse({
+						message: "Redirects saved"
+					});
+				} catch (error) {
+					log('Error updating rules after save: ' + error.message, true);
+					sendResponse({
+						message: "Redirects saved but rules update failed: " + error.message
+					});
+				}
 			}
 		});
+		return true; // Keep sendResponse alive for async response
 	} else if (request.type == 'update-icon') {
 		updateIcon();
+		return false; // Synchronous response
 	} else if (request.type == 'toggle-sync') {
 		// Handle sync toggle
 		delete request.type;
 		log('toggling sync to ' + request.isSyncEnabled);
 		chrome.storage.local.set({
 			isSyncEnabled: request.isSyncEnabled
-		}, function () {
+		}, async function () {
 			if (request.isSyncEnabled) {
 				storageArea = chrome.storage.sync;
 				chrome.storage.local.getBytesInUse("redirects", function (size) {
@@ -340,12 +376,17 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
 							message: "Sync Not Possible - size of Redirects larger than what's allowed by Sync. Refer Help page"
 						});
 					} else {
-						chrome.storage.local.get({ redirects: [] }, function (obj) {
+						chrome.storage.local.get({ redirects: [] }, async function (obj) {
 							if (obj.redirects.length > 0) {
-								chrome.storage.sync.set(obj, function () {
+								chrome.storage.sync.set(obj, async function () {
 									chrome.storage.local.remove("redirects");
-									updateDeclarativeRules();
-									sendResponse({ message: "sync-enabled" });
+									try {
+										await updateDeclarativeRules();
+										sendResponse({ message: "sync-enabled" });
+									} catch (error) {
+										log('Error updating rules after sync enable: ' + error.message, true);
+										sendResponse({ message: "sync-enabled" });
+									}
 								});
 							} else {
 								sendResponse({ message: "sync-enabled" });
@@ -355,12 +396,17 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
 				});
 			} else {
 				storageArea = chrome.storage.local;
-				chrome.storage.sync.get({ redirects: [] }, function (obj) {
+				chrome.storage.sync.get({ redirects: [] }, async function (obj) {
 					if (obj.redirects.length > 0) {
-						chrome.storage.local.set(obj, function () {
+						chrome.storage.local.set(obj, async function () {
 							chrome.storage.sync.remove("redirects");
-							updateDeclarativeRules();
-							sendResponse({ message: "sync-disabled" });
+							try {
+								await updateDeclarativeRules();
+								sendResponse({ message: "sync-disabled" });
+							} catch (error) {
+								log('Error updating rules after sync disable: ' + error.message, true);
+								sendResponse({ message: "sync-disabled" });
+							}
 						});
 					} else {
 						sendResponse({ message: "sync-disabled" });
@@ -368,12 +414,12 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
 				});
 			}
 		});
+		return true; // Keep sendResponse alive for async response
 	} else {
 		log('Unexpected message: ' + JSON.stringify(request));
-		return false;
+		sendResponse({ error: 'Unknown message type' });
+		return false; // Synchronous response for unknown messages
 	}
-
-	return true; // Keep sendResponse alive for async responses
 });
 
 // Notification function
