@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Redirector",
   "description": "Automatically redirect content based on user-defined rules.",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "icons": {
     "16": "images/icon-light-theme-16.png",
     "19": "images/icon-light-theme-19.png",

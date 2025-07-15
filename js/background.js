@@ -23,6 +23,9 @@ var storageArea = chrome.storage.local;
 // Store current redirect rules
 var currentRedirects = [];
 
+// Lock to prevent concurrent rule updates
+let ruleUpdateLock = false;
+
 function setIcon(image) {
 	var data = { 
 		path: {}
@@ -146,15 +149,18 @@ function convertRedirectsToRules(redirects) {
 		rule.condition.resourceTypes = resourceTypes;
 
 		// Handle redirect URL
-		if (redirect.redirectUrl.includes('$')) {
-			// For patterns with substitution groups (both regex and wildcard)
-			if (redirect.patternType === 'W') {
-				// Convert wildcard pattern to regex for substitution
-				const redirectObj = new Redirect(redirect);
-				rule.condition.regexFilter = redirectObj._preparePattern(redirect.includePattern);
-				delete rule.condition.urlFilter; // Remove urlFilter when using regexFilter
-			}
-			rule.action.regexSubstitution = redirect.redirectUrl;
+		if (redirect.redirectUrl.includes('$') && redirect.patternType === 'R') {
+			// Only regex patterns support substitution in Chrome declarativeNetRequest
+			rule.action.redirect = {
+				regexSubstitution: redirect.redirectUrl
+			};
+		} else if (redirect.redirectUrl.includes('$') && redirect.patternType === 'W') {
+			// For wildcard patterns with substitution, we need to fall back to simple redirect
+			// Chrome's declarativeNetRequest doesn't support wildcard substitution
+			log(`Warning: Wildcard substitution not supported in Chrome MV3, using simple redirect for: ${redirect.includePattern}`);
+			rule.action.redirect = { 
+				url: redirect.redirectUrl.replace(/\$\d+/g, '') // Remove substitution markers
+			};
 		} else {
 			// For simple redirects without substitution
 			rule.action.redirect = { url: redirect.redirectUrl };
@@ -162,6 +168,7 @@ function convertRedirectsToRules(redirects) {
 
 		rules.push(rule);
 		log(`Created rule ${rule.id}: ${redirect.includePattern} -> ${redirect.redirectUrl}`);
+		log(`Rule details: ${JSON.stringify(rule, null, 2)}`);
 		
 		} catch (error) {
 			log('Error processing redirect rule: ' + error.message + ', redirect: ' + JSON.stringify(redirect));
@@ -173,35 +180,59 @@ function convertRedirectsToRules(redirects) {
 
 // Update declarativeNetRequest rules
 async function updateDeclarativeRules() {
+	// Prevent concurrent rule updates
+	if (ruleUpdateLock) {
+		log('Rule update already in progress, skipping...');
+		return;
+	}
+	
+	ruleUpdateLock = true;
+	
 	try {
 		log('Updating declarativeNetRequest rules...');
 		
 		const result = await chrome.storage.local.get({ redirects: [] });
 		const redirects = result.redirects;
 		
-		// Step 1: Get and remove ALL existing rules first
+		// Step 1: Get ALL existing rules first and log them
 		const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
 		const existingRuleIds = existingRules.map(rule => rule.id);
 		
+		log(`Found ${existingRules.length} existing rules with IDs: [${existingRuleIds.join(', ')}]`);
+		
+		// Step 2: Remove ALL existing rules if any exist
 		if (existingRuleIds.length > 0) {
 			log(`Removing ${existingRuleIds.length} existing rules: [${existingRuleIds.join(', ')}]`);
 			await chrome.declarativeNetRequest.updateDynamicRules({
 				removeRuleIds: existingRuleIds
 			});
 			
-			// Wait a bit to ensure removal is complete
-			await new Promise(resolve => setTimeout(resolve, 100));
+			// Wait longer to ensure removal is complete
+			await new Promise(resolve => setTimeout(resolve, 200));
 			
-			// Verify rules are cleared
-			const remainingRules = await chrome.declarativeNetRequest.getDynamicRules();
+			// Verify rules are completely cleared
+			let attempts = 0;
+			let remainingRules;
+			do {
+				remainingRules = await chrome.declarativeNetRequest.getDynamicRules();
+				if (remainingRules.length > 0) {
+					attempts++;
+					log(`Attempt ${attempts}: ${remainingRules.length} rules still exist after removal, waiting...`);
+					if (attempts < 3) {
+						// Force remove any remaining rules
+						const remainingIds = remainingRules.map(r => r.id);
+						await chrome.declarativeNetRequest.updateDynamicRules({
+							removeRuleIds: remainingIds
+						});
+						await new Promise(resolve => setTimeout(resolve, 100));
+					}
+				}
+			} while (remainingRules.length > 0 && attempts < 3);
+			
 			if (remainingRules.length > 0) {
-				log(`Warning: ${remainingRules.length} rules still exist after removal`);
-				// Force remove any remaining rules
-				const remainingIds = remainingRules.map(r => r.id);
-				await chrome.declarativeNetRequest.updateDynamicRules({
-					removeRuleIds: remainingIds
-				});
-				await new Promise(resolve => setTimeout(resolve, 50));
+				log(`Warning: Failed to clear all rules after 3 attempts, ${remainingRules.length} rules remain`, true);
+			} else {
+				log('All existing rules successfully cleared');
 			}
 		}
 		
@@ -212,7 +243,7 @@ async function updateDeclarativeRules() {
 
 		currentRedirects = redirects;
 		
-		// Step 2: Generate new rules with fresh IDs starting from 1
+		// Step 3: Generate new rules with fresh IDs starting from 1
 		const newRules = convertRedirectsToRules(redirects);
 		
 		log(`Converting ${redirects.length} redirects to ${newRules.length} declarativeNetRequest rules`);
@@ -222,15 +253,22 @@ async function updateDeclarativeRules() {
 			return;
 		}
 
-		// Step 3: Add new rules
+		// Step 4: Add new rules
 		log(`Adding rules with IDs: [${newRules.map(r => r.id).join(', ')}]`);
 		await chrome.declarativeNetRequest.updateDynamicRules({
 			addRules: newRules
 		});
-		log('Successfully updated declarativeNetRequest rules');
+		
+		// Verify rules were added correctly
+		const finalRules = await chrome.declarativeNetRequest.getDynamicRules();
+		log(`Successfully updated declarativeNetRequest rules. Final count: ${finalRules.length}`);
 		
 	} catch (error) {
 		log('Error updating declarativeNetRequest rules: ' + error.message, true);
+		console.error('Detailed error:', error);
+	} finally {
+		// Always release the lock
+		ruleUpdateLock = false;
 	}
 }
 
@@ -304,14 +342,18 @@ function monitorChanges(changes, namespace) {
 				});
 			} else {
 				// Re-setup rules when enabled
-				updateDeclarativeRules();
+				updateDeclarativeRules().catch(error => {
+					log('Error re-enabling rules: ' + error.message, true);
+				});
 			}
 		});
 	}
 
 	if (changes.redirects) {
 		log('Redirects have changed, updating rules');
-		updateDeclarativeRules();
+		updateDeclarativeRules().catch(error => {
+			log('Error updating rules after redirect changes: ' + error.message, true);
+		});
 	}
 
 	if (changes.logging) {
@@ -505,7 +547,9 @@ function setupInitial() {
 	chrome.storage.local.get({ disabled: false }, function (obj) {
 		log('Extension disabled: ' + obj.disabled);
 		if (!obj.disabled) {
-			updateDeclarativeRules();
+			updateDeclarativeRules().catch(error => {
+				log('Error setting up initial rules: ' + error.message, true);
+			});
 		} else {
 			log('Redirector is disabled');
 		}
