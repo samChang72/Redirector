@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <title>Redirector 重定向測試頁面</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.6; }
+        .test-case { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .test-case h3 { margin-top: 0; color: #333; }
+        .test-link { display: inline-block; padding: 8px 16px; background: #007cba; color: white; text-decoration: none; border-radius: 4px; margin: 5px 0; }
+        .test-link:hover { background: #005a87; }
+        .expected { background: #f0f8f0; padding: 10px; border-left: 4px solid #4caf50; margin: 10px 0; }
+        .note { background: #fff3cd; padding: 10px; border-left: 4px solid #ffc107; margin: 10px 0; }
+        .status { font-weight: bold; }
+        .success { color: #4caf50; }
+        .error { color: #f44336; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Redirector MV3 重定向測試</h1>
+    
+    <div class="note">
+        <h3>📝 測試說明</h3>
+        <p>請先確保 Redirector 擴充功能已重新載入，然後點擊下方測試連結。</p>
+        <p>如果重定向成功，頁面應該會跳轉到預期的目標 URL。</p>
+    </div>
+
+    <div class="test-case">
+        <h3>🎯 測試案例 1: 萬用字元 - 簡單模式</h3>
+        <p><strong>假設規則:</strong> <code>*.example.com/*</code> → <code>https://redirect.example.com/</code></p>
+        <a href="https://test.example.com/page" class="test-link" target="_blank">測試簡單萬用字元</a>
+        <div class="expected">
+            <strong>預期結果:</strong> 應重定向到 https://redirect.example.com/
+        </div>
+    </div>
+
+    <div class="test-case">
+        <h3>🎯 測試案例 2: 萬用字元 - 複雜模式 (JS 檔案)</h3>
+        <p><strong>假設規則:</strong> <code>*/player-*.min.js</code> → <code>https://cdn.example.com/player-fixed.min.js</code></p>
+        <a href="https://example.com/js/player-v1.2.3.min.js" class="test-link" target="_blank">測試複雜萬用字元</a>
+        <div class="expected">
+            <strong>預期結果:</strong> 應重定向到 https://cdn.example.com/player-fixed.min.js
+        </div>
+        <div class="note">
+            <strong>注意:</strong> 這種複雜萬用字元會被自動轉換為正則表達式。
+        </div>
+    </div>
+
+    <div class="test-case">
+        <h3>🎯 測試案例 3: 正則表達式 - 帶替換</h3>
+        <p><strong>假設規則:</strong> <code>https://old\.com/(.+)</code> → <code>https://new.com/$1</code></p>
+        <a href="https://old.com/test-page" class="test-link" target="_blank">測試正則替換</a>
+        <div class="expected">
+            <strong>預期結果:</strong> 應重定向到 https://new.com/test-page
+        </div>
+        <div class="note">
+            <strong>注意:</strong> MV3 中 $1 會被轉換為 \\1。
+        </div>
+    </div>
+
+    <div class="test-case">
+        <h3>🎯 測試案例 4: 特定檔案類型重定向</h3>
+        <p><strong>假設規則:</strong> <code>*/blocked-script.js</code> → <code>https://safe-cdn.com/safe-script.js</code></p>
+        <a href="https://malicious-site.com/blocked-script.js" class="test-link" target="_blank">測試檔案重定向</a>
+        <div class="expected">
+            <strong>預期結果:</strong> 應重定向到 https://safe-cdn.com/safe-script.js
+        </div>
+    </div>
+
+    <div class="test-case">
+        <h3>🔍 除錯工具</h3>
+        <button onclick="openDevTools()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">開啟 Chrome DevTools 指南</button>
+        <button onclick="checkNetworkTab()" style="padding: 10px 20px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 10px;">檢查 Network 分頁</button>
+    </div>
+
+    <div id="debug-info" style="margin-top: 20px;"></div>
+
+    <script>
+        function openDevTools() {
+            const debugDiv = document.getElementById('debug-info');
+            debugDiv.innerHTML = `
+                <div class="note">
+                    <h3>🛠️ Chrome DevTools 除錯步驟</h3>
+                    <ol>
+                        <li><strong>開啟擴充功能管理:</strong> chrome://extensions/</li>
+                        <li><strong>找到 Redirector</strong> 並點擊 "Service Worker"</li>
+                        <li><strong>查看控制台日誌:</strong> 尋找 "REDIRECTOR:" 開頭的訊息</li>
+                        <li><strong>檢查動態規則:</strong> 輸入 <code>chrome.declarativeNetRequest.getDynamicRules().then(console.log)</code></li>
+                        <li><strong>檢查儲存的規則:</strong> 輸入 <code>chrome.storage.local.get('redirects').then(console.log)</code></li>
+                    </ol>
+                </div>
+            `;
+        }
+
+        function checkNetworkTab() {
+            const debugDiv = document.getElementById('debug-info');
+            debugDiv.innerHTML = `
+                <div class="note">
+                    <h3>🌐 Network 分頁檢查步驟</h3>
+                    <ol>
+                        <li><strong>開啟 DevTools:</strong> F12 或右鍵 → 檢查</li>
+                        <li><strong>切換到 Network 分頁</strong></li>
+                        <li><strong>點擊測試連結</strong></li>
+                        <li><strong>查看請求:</strong> 
+                            <ul>
+                                <li>✅ 如果看到 307/308 重定向，表示規則生效</li>
+                                <li>❌ 如果沒有重定向，檢查規則設定</li>
+                                <li>⚠️ 如果看到錯誤，檢查 Console 分頁</li>
+                            </ul>
+                        </li>
+                    </ol>
+                </div>
+            `;
+        }
+
+        // 頁面載入時顯示當前時間
+        document.addEventListener('DOMContentLoaded', function() {
+            const now = new Date().toLocaleString('zh-TW');
+            console.log('測試頁面載入時間:', now);
+        });
+    </script>
+</body>
+</html>

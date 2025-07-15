@@ -69,15 +69,38 @@ function convertRedirectsToRules(redirects) {
 
 		// Handle different pattern types
 		if (redirect.patternType === 'W') { // Wildcard
-			// Convert wildcard pattern to URL filter for declarativeNetRequest
-			let urlFilter = redirect.includePattern;
+			// Check if wildcard pattern is complex (multiple * or middle wildcards)
+			const asteriskCount = (redirect.includePattern.match(/\*/g) || []).length;
+			const hasMiddleWildcard = redirect.includePattern.indexOf('*') > 0 && 
+									 redirect.includePattern.indexOf('*') < redirect.includePattern.length - 1;
 			
-			// Ensure protocol is present
-			if (!urlFilter.includes('://')) {
-				urlFilter = '*://' + urlFilter;
+			if (asteriskCount > 1 || hasMiddleWildcard) {
+				// Complex wildcard pattern - convert to regex
+				log(`Converting complex wildcard to regex: ${redirect.includePattern}`);
+				
+				let regexPattern = redirect.includePattern
+					.replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape regex special chars
+					.replace(/\*/g, '.*'); // Convert * to .*
+				
+				// Ensure protocol is present
+				if (!regexPattern.includes('://')) {
+					regexPattern = '.*://' + regexPattern;
+				}
+				
+				rule.condition.regexFilter = regexPattern;
+				log(`Regex pattern: ${regexPattern}`);
+			} else {
+				// Simple wildcard - use urlFilter
+				let urlFilter = redirect.includePattern;
+				
+				// Ensure protocol is present
+				if (!urlFilter.includes('://')) {
+					urlFilter = '*://' + urlFilter;
+				}
+				
+				rule.condition.urlFilter = urlFilter;
+				log(`URL filter: ${urlFilter}`);
 			}
-			
-			rule.condition.urlFilter = urlFilter;
 		} else if (redirect.patternType === 'R') { // Regex
 			try {
 				// Test if regex is valid
@@ -145,13 +168,30 @@ function convertRedirectsToRules(redirects) {
 		
 		rule.condition.resourceTypes = resourceTypes;
 
-		// Handle redirect URL
+		// Handle redirect URL - be more careful about when to use regexSubstitution
 		if (redirect.patternType === 'R' && redirect.redirectUrl.includes('$')) {
-			// For regex patterns with substitution groups
-			rule.action.regexSubstitution = redirect.redirectUrl;
+			// For regex patterns with substitution groups (like $1, $2)
+			// Convert $1, $2 to \\1, \\2 for MV3 compatibility
+			const substitution = redirect.redirectUrl.replace(/\$(\d+)/g, '\\$1');
+			rule.action.regexSubstitution = substitution;
+			log(`Using regex substitution: ${substitution}`);
+		} else if (redirect.patternType === 'W' && redirect.redirectUrl.includes('$')) {
+			// Wildcard with substitution - this is problematic in MV3
+			// Try to convert to regex if possible
+			if (rule.condition.regexFilter) {
+				// We already converted wildcard to regex, so we can use regexSubstitution
+				const substitution = redirect.redirectUrl.replace(/\$(\d+)/g, '\\$1');
+				rule.action.regexSubstitution = substitution;
+				log(`Wildcard converted to regex substitution: ${substitution}`);
+			} else {
+				// Simple wildcard substitution not supported in MV3 urlFilter
+				log(`Warning: Wildcard substitution not supported in MV3 for simple patterns: ${redirect.redirectUrl}`);
+				rule.action.redirect = { url: redirect.redirectUrl };
+			}
 		} else {
-			// For simple redirects or wildcard
+			// For simple redirects without substitution
 			rule.action.redirect = { url: redirect.redirectUrl };
+			log(`Using simple redirect: ${redirect.redirectUrl}`);
 		}
 
 		rules.push(rule);

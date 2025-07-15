@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <title>Redirector MV3 測試頁面</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .rule { border: 1px solid #ccc; margin: 10px 0; padding: 10px; border-radius: 5px; }
+        .rule.wildcard { background-color: #e8f4fd; }
+        .rule.regex { background-color: #fff2e8; }
+        .rule.error { background-color: #ffe8e8; }
+        .log { background-color: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 5px; white-space: pre-wrap; font-family: monospace; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        .test-links a { display: block; margin: 5px 0; color: blue; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <h1>Redirector MV3 測試頁面</h1>
+    
+    <div>
+        <button onclick="checkRules()">檢查當前規則</button>
+        <button onclick="checkDynamicRules()">檢查 Dynamic Rules</button>
+        <button onclick="testWildcardRule()">測試萬用字元規則</button>
+        <button onclick="testRegexRule()">測試正則表達式規則</button>
+        <button onclick="clearLog()">清除日誌</button>
+    </div>
+
+    <h2>當前重定向規則</h2>
+    <div id="rules"></div>
+
+    <h2>Dynamic Rules 狀態</h2>
+    <div id="dynamicRules"></div>
+
+    <h2>測試連結</h2>
+    <div class="test-links" id="testLinks">
+        <p>測試連結會在檢查規則後顯示</p>
+    </div>
+
+    <h2>日誌</h2>
+    <div class="log" id="log"></div>
+
+    <script>
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.textContent += `[${timestamp}] ${message}\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('log').textContent = '';
+        }
+
+        async function checkRules() {
+            log('檢查當前重定向規則...');
+            
+            try {
+                const response = await chrome.runtime.sendMessage({ type: 'get-redirects' });
+                log(`收到 ${response.redirects ? response.redirects.length : 0} 個重定向規則`);
+                
+                const rulesDiv = document.getElementById('rules');
+                rulesDiv.innerHTML = '';
+                
+                if (response.redirects && response.redirects.length > 0) {
+                    response.redirects.forEach((rule, index) => {
+                        const ruleDiv = document.createElement('div');
+                        ruleDiv.className = `rule ${rule.patternType === 'W' ? 'wildcard' : 'regex'}`;
+                        
+                        let status = rule.disabled ? '已停用' : '啟用';
+                        let typeText = rule.patternType === 'W' ? '萬用字元' : '正則表達式';
+                        
+                        ruleDiv.innerHTML = `
+                            <h4>規則 ${index + 1}: ${rule.description || '未命名'} (${status})</h4>
+                            <p><strong>類型:</strong> ${typeText}</p>
+                            <p><strong>來源模式:</strong> <code>${rule.includePattern}</code></p>
+                            <p><strong>目標 URL:</strong> <code>${rule.redirectUrl}</code></p>
+                            <p><strong>適用於:</strong> ${rule.appliesTo ? rule.appliesTo.join(', ') : '所有'}</p>
+                            ${rule.disabled ? '<p style="color: red;"><strong>狀態:</strong> 此規則已停用</p>' : ''}
+                        `;
+                        
+                        rulesDiv.appendChild(ruleDiv);
+                    });
+                    
+                    generateTestLinks(response.redirects);
+                } else {
+                    rulesDiv.innerHTML = '<p>沒有找到重定向規則</p>';
+                }
+            } catch (error) {
+                log('錯誤: ' + error.message);
+            }
+        }
+
+        async function checkDynamicRules() {
+            log('檢查 declarativeNetRequest 動態規則...');
+            
+            try {
+                const rules = await chrome.declarativeNetRequest.getDynamicRules();
+                log(`找到 ${rules.length} 個動態規則`);
+                
+                const dynamicRulesDiv = document.getElementById('dynamicRules');
+                dynamicRulesDiv.innerHTML = '';
+                
+                if (rules.length > 0) {
+                    rules.forEach(rule => {
+                        const ruleDiv = document.createElement('div');
+                        ruleDiv.className = 'rule';
+                        
+                        let conditionText = '';
+                        if (rule.condition.urlFilter) {
+                            conditionText = `URL Filter: ${rule.condition.urlFilter}`;
+                        } else if (rule.condition.regexFilter) {
+                            conditionText = `Regex Filter: ${rule.condition.regexFilter}`;
+                        }
+                        
+                        let actionText = '';
+                        if (rule.action.redirect) {
+                            actionText = `重定向到: ${rule.action.redirect.url}`;
+                        } else if (rule.action.regexSubstitution) {
+                            actionText = `正則替換: ${rule.action.regexSubstitution}`;
+                        }
+                        
+                        ruleDiv.innerHTML = `
+                            <h4>Dynamic Rule ID: ${rule.id}</h4>
+                            <p><strong>優先級:</strong> ${rule.priority}</p>
+                            <p><strong>條件:</strong> ${conditionText}</p>
+                            <p><strong>動作:</strong> ${actionText}</p>
+                            <p><strong>資源類型:</strong> ${rule.condition.resourceTypes ? rule.condition.resourceTypes.join(', ') : '未指定'}</p>
+                        `;
+                        
+                        dynamicRulesDiv.appendChild(ruleDiv);
+                    });
+                } else {
+                    dynamicRulesDiv.innerHTML = '<p>沒有找到動態規則</p>';
+                }
+            } catch (error) {
+                log('錯誤: ' + error.message);
+            }
+        }
+
+        function generateTestLinks(redirects) {
+            const testLinksDiv = document.getElementById('testLinks');
+            testLinksDiv.innerHTML = '<h3>根據您的規則生成的測試連結：</h3>';
+            
+            redirects.forEach((rule, index) => {
+                if (rule.disabled) return;
+                
+                const linkDiv = document.createElement('div');
+                linkDiv.style.marginBottom = '10px';
+                
+                // 基於規則類型生成測試 URL
+                let testUrl = '';
+                if (rule.patternType === 'W') {
+                    // 萬用字元測試
+                    testUrl = rule.includePattern.replace(/\*/g, 'test');
+                    if (!testUrl.includes('://')) {
+                        testUrl = 'https://' + testUrl;
+                    }
+                } else if (rule.patternType === 'R') {
+                    // 正則表達式測試 - 提供建議測試 URL
+                    if (rule.includePattern.includes('player-.*\\.min\\.js')) {
+                        testUrl = 'https://example.com/js/player-v1.2.3.min.js';
+                    } else {
+                        testUrl = '(需要手動構造符合正則的 URL)';
+                    }
+                }
+                
+                linkDiv.innerHTML = `
+                    <p><strong>規則 ${index + 1}:</strong> ${rule.description || '未命名'}</p>
+                    <p>測試 URL: <a href="${testUrl}" target="_blank">${testUrl}</a></p>
+                    <p>預期重定向到: <code>${rule.redirectUrl}</code></p>
+                `;
+                
+                testLinksDiv.appendChild(linkDiv);
+            });
+        }
+
+        function testWildcardRule() {
+            log('測試萬用字元規則...');
+            // 開啟一個測試萬用字元的頁面
+            window.open('https://example.com/player-test.min.js', '_blank');
+        }
+
+        function testRegexRule() {
+            log('測試正則表達式規則...');
+            // 開啟一個測試正則的頁面
+            window.open('https://example.com/js/player-v1.2.3.min.js', '_blank');
+        }
+
+        // 頁面載入時自動檢查規則
+        document.addEventListener('DOMContentLoaded', function() {
+            log('頁面載入完成，開始檢查規則...');
+            checkRules();
+            setTimeout(checkDynamicRules, 1000);
+        });
+    </script>
+</body>
+</html>
