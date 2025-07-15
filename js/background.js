@@ -146,11 +146,17 @@ function convertRedirectsToRules(redirects) {
 		rule.condition.resourceTypes = resourceTypes;
 
 		// Handle redirect URL
-		if (redirect.patternType === 'R' && redirect.redirectUrl.includes('$')) {
-			// For regex patterns with substitution groups
+		if (redirect.redirectUrl.includes('$')) {
+			// For patterns with substitution groups (both regex and wildcard)
+			if (redirect.patternType === 'W') {
+				// Convert wildcard pattern to regex for substitution
+				const redirectObj = new Redirect(redirect);
+				rule.condition.regexFilter = redirectObj._preparePattern(redirect.includePattern);
+				delete rule.condition.urlFilter; // Remove urlFilter when using regexFilter
+			}
 			rule.action.regexSubstitution = redirect.redirectUrl;
 		} else {
-			// For simple redirects or wildcard
+			// For simple redirects without substitution
 			rule.action.redirect = { url: redirect.redirectUrl };
 		}
 
